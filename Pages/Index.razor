@@ -1,0 +1,332 @@
+﻿@page "/"
+@inject IJSRuntime JS
+
+<PageTitle>AM5 SMU Checker v0.5</PageTitle>
+
+<InputFile OnChange="@LoadFiles" multiple />
+
+<p style="background-color:black;">
+    @((MarkupString)htmlOutputOfProcess)
+</p>
+
+@if (canvasOutputOfProcess.Length > 0 && !showingCanvas)
+{
+    <a @onclick="ShowCanvas">Show as image</a>
+}
+
+@if (showingCanvas)
+{
+    <a @onclick="SaveAsImage">Save as image...</a>
+}
+
+@code {
+    private async Task LoadFiles(InputFileChangeEventArgs e)
+    {
+        htmlOutputOfProcess = "<samp style=\"color:#FFFFFF;\">Processing started (this might take up to 30 seconds)</samp>";
+
+        if (e.FileCount == 1)
+        {
+            using var stream = e.File.OpenReadStream(maxAllowedSize: maxInputReadSize);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            (bool success, string htmlOutput, string[] canvasCommands) = ProcessInputFile(e.File.Name, ms);
+            htmlOutputOfProcess = htmlOutput;
+            canvasOutputOfProcess = canvasCommands;
+        }
+        else if (e.FileCount > 1)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (IBrowserFile browserFile in e.GetMultipleFiles())
+            {
+                using var stream = browserFile.OpenReadStream(maxAllowedSize: maxInputReadSize);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+
+                (bool success, string htmlOutput, string[] canvasCommands) = ProcessInputFile(browserFile.Name, ms);
+                sb.AppendLine(htmlOutput);
+            }
+            htmlOutputOfProcess = sb.ToString();  
+        }
+    }
+
+    private static readonly string[] zipFileBlacklist =
+    {
+        "/",
+        ".txt",
+        ".ini",
+        ".bat",
+        ".exe"
+    };
+
+    private string htmlOutputOfProcess { get; set; } = "<samp style=\"color:#FFFFFF;\">No file(s) processed</samp>";
+
+    private string[] canvasOutputOfProcess { get; set; } = new string[0];
+
+    private bool showingCanvas { get; set; } = false;
+
+    private const long maxInputReadSize = 40 * 1024 * 1024; // 40 megabytes for now
+
+    private static readonly string nonBreakingSpace = "&nbsp;";
+    private static readonly char nonBreakingCharReplacement = ' ';
+
+    private async Task ShowCanvas()
+    {
+        await JS.InvokeVoidAsync("drawCanvasCommands", (object)canvasOutputOfProcess);
+        showingCanvas = true;
+    }
+
+    private async Task SaveAsImage()
+    {
+        await JS.InvokeVoidAsync("saveAsImage");
+    }
+
+    private (bool success, string htmlOutput, string[] canvasCommands) ProcessInputFile(string filename, MemoryStream memoryStream)
+    {
+        showingCanvas = false;
+
+        StringBuilder sb = new StringBuilder();
+        List<(string, PrintColor, PrintColor)> cc = new List<(string, PrintColor, PrintColor)>();
+
+        Log(sb, cc, "                           U E F I   I N F O                             ", PrintColor.White, PrintColor.DarkBlue);
+        
+        string biosName = "";
+        byte[]? biosBytes = null;
+
+        if (filename.EndsWith(".zip"))
+        {
+            using (var zipArchive = new ZipArchive(memoryStream, ZipArchiveMode.Read))
+            {
+                foreach(var zipEntry in zipArchive.Entries)
+                {
+                    if (string.IsNullOrEmpty(zipEntry.Name) || zipFileBlacklist.Any(x => zipEntry.Name.EndsWith(x)))
+                    {
+                        continue;
+                    }
+
+                    biosName = zipEntry.Name;
+
+                    using (var byteStream = zipEntry.Open())
+                    using (var memStream = new MemoryStream())
+                    {
+                        byteStream.CopyTo(memStream);
+                        biosBytes = memStream.ToArray();
+                    }
+                    break;
+                }
+            }
+
+            if (biosName is null || biosBytes is null)
+            {
+                Log(sb, cc, $"Could not retrieve bios from {filename}\n", PrintColor.DarkRed);
+                return (success: false, htmlOutput: sb.ToString(), canvasCommands: CanvasCommandsToArray(cc));
+            }
+        }
+        else
+        {
+            biosName = filename;
+            biosBytes = memoryStream.ToArray();
+        }
+
+        Log(sb, cc, $"    File:  {biosName}");
+        Log(sb, cc, $"    Size:  {BytesToKB(biosBytes.Length).ToString("N0")} KB");
+
+        string versionStr = "";
+        var agesaVersion = SearchPattern(biosBytes, "3D 9B 25 70 41 47 45 53 41", 0xD).FirstOrDefault();
+        if (agesaVersion != 0)
+        {
+            var buf = new byte[255];
+            Array.Copy(biosBytes, agesaVersion, buf, 0, buf.Length);
+
+            versionStr = Encoding.UTF8.GetString(buf);
+            if (versionStr.Contains('\0'))
+            {
+                versionStr = versionStr.Substring(0, versionStr.IndexOf('\0'));
+            }
+
+            Log(sb, cc, $"    AGESA: {versionStr}");
+        }
+
+        Log(sb, cc, "");
+
+        List<int> chipsetVersions = SearchPattern(biosBytes, "5F 50 54 5F");
+        if (chipsetVersions.Any())
+        {
+            foreach (int num in chipsetVersions)
+            {
+                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 4);
+
+                string yearAndMonth = "";
+                for (int startIndex = num + 140; startIndex < num + 142; ++startIndex)
+                    yearAndMonth = yearAndMonth + BitConverter.ToString(biosBytes, startIndex, 1) + ".";
+
+                string day = "";
+                for (int startIndex = num + 142; startIndex < num + 143; ++startIndex)
+                    day += BitConverter.ToString(biosBytes, startIndex, 1);
+
+                string firmware = "FW_";
+                for (int index = num + 147; index < num + 152; ++index)
+                    firmware += Encoding.UTF8.GetString(biosBytes, index, 1);
+
+                string versionMajor = "";
+                for (int startIndex = num + 143; startIndex < num + 145; ++startIndex)
+                    versionMajor = versionMajor + BitConverter.ToString(biosBytes, startIndex, 1) + ".";
+
+                string versionMinor = "";
+                for (int startIndex = num + 145; startIndex < num + 146; ++startIndex)
+                    versionMinor += BitConverter.ToString(biosBytes, startIndex, 1);
+
+                Log(sb, cc, $"    Chipset Version/FW:   {versionMajor}{versionMinor} | {firmware} | 20{yearAndMonth}{day} | ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)", PrintColor.Gray);
+            }
+        }
+
+        Log(sb, cc, "");
+
+        Log(sb, cc, "        S Y S T E M    M A N A G E M E N T    U N I T    [ S M U ]       ", PrintColor.White, PrintColor.DarkBlue);
+
+        Log(sb, cc, "    Version      Size          CPU/APU  Family             Offset        ", PrintColor.Black, PrintColor.DarkCyan);
+
+        // Raphael
+        List<int> raphael = SearchPattern(biosBytes, "00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -112);
+
+        if (raphael.Any())
+        {
+            foreach (int num in raphael)
+            {
+                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
+                string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
+
+                Log(sb, cc, $"    {version}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Raphael (RPL)  7xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+            }
+        }
+        else
+        {
+            Log(sb, cc, $"    --.--.-               Raphael (RPL)             [  SMU Not Found  ]", PrintColor.DarkRed);
+        }
+
+        Log(sb, cc, "");
+
+        // Credits
+        Log(sb, cc, "                 Credits to RaINi, Reous and PatrickSchur                ", PrintColor.Black, PrintColor.DarkBlue);
+
+        return (success: true, htmlOutput: sb.ToString(), canvasCommands: CanvasCommandsToArray(cc));
+    }
+
+    private static double BytesToKB(int bytes)
+    {
+        return bytes / 1024d;
+    }
+
+    private static void Log(StringBuilder sbHTML, List<(string, PrintColor, PrintColor)> canvasCommands, string message, PrintColor foregroundColor = PrintColor.White, PrintColor backgroundColor = PrintColor.Black)
+    {
+        LogHTML(sbHTML, message, foregroundColor, backgroundColor);
+        LogCanvas(canvasCommands, message, foregroundColor, backgroundColor);
+    }
+
+    private static void LogHTML(StringBuilder sb, string message, PrintColor foregroundColor = PrintColor.White, PrintColor backgroundColor = PrintColor.Black)
+    {
+        string foregroundColorHtml = PrintColors.Colors[foregroundColor];
+        string backgroundColorHtml = PrintColors.Colors[backgroundColor];
+
+        message = message.Replace(nonBreakingCharReplacement.ToString(), nonBreakingSpace);
+
+        sb.Append($"<samp style=\"color:{foregroundColorHtml}; background-color:{backgroundColorHtml};\">");
+        sb.AppendLine($"{message}</samp>");
+        sb.AppendLine("<br>");
+    }
+
+    private static void LogCanvas(List<(string, PrintColor, PrintColor)> canvasCommands, string message, PrintColor foregroundColor = PrintColor.White, PrintColor backgroundColor = PrintColor.Black)
+    {
+        canvasCommands.Add((message, foregroundColor, backgroundColor));
+    }
+
+    private static string[] CanvasCommandsToArray(List<(string, PrintColor, PrintColor)> canvasCommands)
+    {
+        string[] commands = new string[canvasCommands.Count * 3];
+
+        int runningIndex = 0;
+        foreach ((string text, PrintColor foregroundColor, PrintColor backgroundColor) in canvasCommands)
+        {
+            commands[runningIndex] = text;
+            runningIndex++;
+            commands[runningIndex] = PrintColors.Colors[foregroundColor];
+            runningIndex++;
+            commands[runningIndex] = PrintColors.Colors[backgroundColor];
+            runningIndex++;
+        }
+
+        return commands;
+    }
+
+    private static int[] CreateMatchingsTable((byte, bool)[] patternTuple)
+    {
+        var skipTable = new int[256];
+        var wildcards = patternTuple.Select(x => x.Item2).ToArray();
+        var lastIndex = patternTuple.Length - 1;
+
+        var diff = lastIndex - Math.Max(Array.LastIndexOf(wildcards, false), 0);
+        if (diff == 0)
+        {
+            diff = 1;
+        }
+
+        for (var i = 0; i < skipTable.Length; i++)
+        {
+            skipTable[i] = diff;
+        }
+
+        for (var i = lastIndex - diff; i < lastIndex; i++)
+        {
+            skipTable[patternTuple[i].Item1] = lastIndex - i;
+        }
+
+        return skipTable;
+    }
+
+    private static List<int> SearchPattern(byte[] data, string pattern, int offset = 0x0)
+    {
+        if (!data.Any())
+        {
+            throw new ArgumentException("Data is empty");
+        }
+
+        if (string.IsNullOrEmpty(pattern))
+        {
+            throw new ArgumentException("Pattern is empty");
+        }
+
+        var patternTuple = pattern.Split(' ')
+            .Select(hex => hex.Contains('?')
+                ? (byte.MinValue, false)
+                : (Convert.ToByte(hex, 16), true))
+            .ToArray();
+
+        if (!patternTuple.Any())
+        {
+            throw new Exception("Failed to parse Pattern");
+        }
+
+        if (data.Length < pattern.Length)
+        {
+            throw new ArgumentException("Data cannot be smaller than the Pattern");
+        }
+
+        var lastPatternIndex = patternTuple.Length - 1;
+        var skipTable = CreateMatchingsTable(patternTuple);
+        var adressList = new List<int>();
+
+        for (var i = 0; i <= data.Length - patternTuple.Length; i += Math.Max(skipTable[data[i + lastPatternIndex] & 0xFF], 1))
+        {
+            for (var j = lastPatternIndex; !patternTuple[j].Item2 || data[i + j] == patternTuple[j].Item1; --j)
+            {
+                if (j == 0)
+                {
+                    adressList.Add(i + offset);
+                    break;
+                }
+            }
+        }
+
+        return adressList;
+    }
+}
