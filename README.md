@@ -2,6 +2,10 @@
 
 Blazor version of **AM5 SMU Checker** that you can run in your browser
 
+## Web link
+
+[am5-smu-checker-blazor.raiha.rocks](https://am5-smu-checker-blazor.raiha.rocks/)
+
 ## Requirements (end user)
 
 You have to have newish [internet browser](https://docs.microsoft.com/en-us/aspnet/core/blazor/supported-platforms?view=aspnetcore-7.0)
