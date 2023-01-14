@@ -1,7 +1,7 @@
 #!/bin/sh
 current_date=$(date --iso-8601=minutes)
 git_short_hash=$(git rev-parse --short HEAD)
-
+ 
 echo $current_date
 echo $git_short_hash
 
