@@ -20,5 +20,15 @@ jobs:
         dotnet-version: 7.0.x
     - name: Install wasm-tools
       run: dotnet workload install wasm-tools
+    - name: Add build info
+      run: add_buildinfo.sh
+      shell: bash
     - name: Publish release
       run: dotnet publish -c Release
+    - name: Upload to pages
+      uses: cloudflare/wrangler-action@2.0.0
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: pages publish bin/Release/net7.0/publish/wwwroot --project-name=am5-smu-checker-blazor
+    
