@@ -1,6 +1,6 @@
 # AM5-SMU-Checker-blazor
 
-Blazor version of **AM5 SMU Checker** that you can run in your browser
+Blazor version of **AM5 SMU Checker** that you can run in your browser to get some info about [AM5](https://en.wikipedia.org/wiki/Socket_AM5) motherboard BIOS file.
 
 ## Web link
 
