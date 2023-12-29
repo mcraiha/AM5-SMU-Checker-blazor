@@ -187,7 +187,7 @@
         Log(sb, cc, "    Version      Size          CPU/APU  Family             Offset        ", PrintColor.Black, PrintColor.DarkCyan);
 
         // Raphael
-        List<int> raphael = SearchPattern(biosBytes, "00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -112);
+        List<int> raphael = SearchPattern(biosBytes, "54 00 00 00 00 00 00 00 00 ? ? ? ? 00 00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -98);
 
         if (raphael.Any())
         {
@@ -196,12 +196,30 @@
                 int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
                 string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
 
-                Log(sb, cc, $"    {version}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Raphael (RPL)  7xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Raphael (RPL)  7xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
             }
         }
         else
         {
             Log(sb, cc, $"    --.--.-               Raphael (RPL)             [  SMU Not Found  ]", PrintColor.DarkRed);
+        }
+
+        // Phoenix
+        List<int> phoenix = SearchPattern(biosBytes, "4A 01 00 00 00 02 00 00 00 00 00 04 00 ? ? ? ? ? ? ? ? 00 00 00 00 00 ? 4C 00", -71);
+
+        if (phoenix.Any())
+        {
+            foreach (int num in phoenix)
+            {
+                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
+                string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
+
+                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Phoenix (PHX)  7xxx APU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+            }
+        }
+        else
+        {
+            Log(sb, cc, $"    --.--.-               Phoenix (PHX)             [  SMU Not Found  ]", PrintColor.DarkRed);
         }
 
         Log(sb, cc, "");
