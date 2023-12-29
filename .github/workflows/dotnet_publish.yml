@@ -25,8 +25,10 @@ jobs:
       shell: bash
     - name: Publish release
       run: dotnet publish -c Release
-    - name: Remove .wasm file
-      run: rm bin/Release/net8.0/publish/wwwroot/_framework/dotnet.wasm
+    - name: Remove .wasm files
+      run: rm bin/Release/net8.0/publish/wwwroot/_framework/*.wasm
+    - name: Remove .gz files
+      run: rm bin/Release/net8.0/publish/wwwroot/_framework/*.gz
     - name: Upload to pages
       uses: cloudflare/wrangler-action@2.0.0
       with:
