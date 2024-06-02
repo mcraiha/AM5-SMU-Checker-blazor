@@ -182,9 +182,9 @@
 
         Log(sb, cc, "");
 
-        Log(sb, cc, "        S Y S T E M    M A N A G E M E N T    U N I T    [ S M U ]       ", PrintColor.White, PrintColor.DarkBlue);
+        Log(sb, cc, "        S Y S T E M    M A N A G E M E N T    U N I T    [ S M U ]        ", PrintColor.White, PrintColor.DarkBlue);
 
-        Log(sb, cc, "    Version      Size          CPU/APU  Family             Offset        ", PrintColor.Black, PrintColor.DarkCyan);
+        Log(sb, cc, "   Version       Size          CPU/APU  Family            Offset          ", PrintColor.Black, PrintColor.DarkCyan);
 
         // Raphael
         List<int> raphael = SearchPattern(biosBytes, "54 00 00 00 00 00 00 00 00 ? ? ? ? 00 00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -98);
@@ -196,7 +196,7 @@
                 int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
                 string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
 
-                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Raphael (RPL)  7xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Raphael/X      7xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
             }
         }
         else
@@ -209,17 +209,37 @@
 
         if (phoenix.Any())
         {
+            Log(sb, cc, "   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ", PrintColor.Cyan);
             foreach (int num in phoenix)
             {
                 int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
                 string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
 
-                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Phoenix/2 (PHX/2) 8xx0 APU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Phoenix/2      8xx0 APU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
             }
         }
         else
         {
             Log(sb, cc, $"    --.--.-               Phoenix (PHX)             [  SMU Not Found  ]", PrintColor.DarkRed);
+        }
+
+        // Granite Ridge
+        List<int> graniteRidge = SearchPattern(biosBytes, "62 00 00 00 00 00 00 00 00 ? ? ? ? 00 00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -98);
+        
+        if (graniteRidge.Any())
+        {
+            Log(sb, cc, "   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ", PrintColor.Cyan);
+            foreach (int num in graniteRidge)
+            {
+                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
+                string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
+
+                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Granite Ridge  9xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+            }
+        }
+        else
+        {
+            Log(sb, cc, $"    --.--.-               Granite Ridge             [  SMU Not Found  ]", PrintColor.DarkRed);
         }
 
         Log(sb, cc, "");
