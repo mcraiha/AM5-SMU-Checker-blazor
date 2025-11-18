@@ -50,4 +50,4 @@ and content should be in **bin\Release\net9.0\publish\wwwroot** folder.
 
 All code files (*.cs, *.razor) and HTML files (*.html) are under [MIT](https://opensource.org/licenses/MIT) license, because original Zen2-SMU-Checker and [MVP.css](https://github.com/andybrewer/mvp/) use that license
 
-Icon file is modified emoji from [Twitter Emoji](https://github.com/twitter/twemoji) (Twemoji) project. Their license is [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+Icon file is modified emoji from [Twemoji](https://github.com/jdecked/twemoji) project. Their license is [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)
