@@ -44,7 +44,7 @@ and content should be in **bin\Release\net9.0\publish\wwwroot** folder.
 
 ## Credits
 
-[RaINi](https://github.com/LeagueRaINi), Reous and [PatrickSchur](https://github.com/patrickschur) for creating the **Zen2-SMU-Checker** command-line tool that is the base of AM5 SMU Checker.
+[RaINi](https://github.com/LeagueRaINi), [Reous](https://github.com/ReousI) and [PatrickSchur](https://github.com/patrickschur) for creating the **Zen2-SMU-Checker** command-line tool that is the base of AM5 SMU Checker.
 
 ## Licenses
 
