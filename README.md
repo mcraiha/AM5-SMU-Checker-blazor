@@ -8,13 +8,13 @@ Blazor version of **AM5 SMU Checker** that you can run in your browser to get so
 
 ## Requirements (end user)
 
-You have to have newish [internet browser](https://docs.microsoft.com/en-us/aspnet/core/blazor/supported-platforms?view=aspnetcore-10.0)
+You have to have newish [internet browser](https://docs.microsoft.com/en-us/aspnet/core/blazor/supported-platforms?view=aspnetcore-11.0)
 
 ## How to run / develop
 
 ### Requirements
 
-You have to have [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) installed,
+You have to have [.NET 11 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/11.0) installed,
 
 ### Actual run
 
@@ -40,7 +40,7 @@ Run
 dotnet publish -c Release
 ```
   
-and content should be in **bin\Release\net9.0\publish\wwwroot** folder.
+and content should be in **bin\Release\net11.0\publish\wwwroot** folder.
 
 ## Credits
 
