@@ -29,7 +29,7 @@ public static class PrintColors
         { PrintColor.DarkCyan, "#008080" },
         { PrintColor.DarkRed, "#800000" },
         { PrintColor.DarkMagenta, "#800080" },
-        { PrintColor.DarkYellow, "#808000" },
+        { PrintColor.DarkYellow, "#C19C00" },
         { PrintColor.Gray, "#C0C0C0" },
         { PrintColor.DarkGray, "#808080" },
         { PrintColor.Blue, "#0000FF" },
