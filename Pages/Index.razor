@@ -1,7 +1,7 @@
 ﻿@page "/"
 @inject IJSRuntime JS
 
-<PageTitle>AM5 SMU Checker v0.8</PageTitle>
+<PageTitle>AM5 SMU Checker v0.9</PageTitle>
 
 <InputFile OnChange="@LoadFiles" multiple />
 
@@ -89,9 +89,60 @@
         List<(string, PrintColor, PrintColor)> cc = new List<(string, PrintColor, PrintColor)>();
 
         Log(sb, cc, "                           U E F I   I N F O                             ", PrintColor.White, PrintColor.DarkBlue);
+
+        bool isArchive = false;
         
-        string biosName = "";
+        string? biosName = null;
         byte[]? biosBytes = null;
+
+        bool useSha256 = false;
+        bool useChecksum16 = false;
+        string? archiveChecksum = null;
+        string? biosChecksum = null;
+
+        string ext = Path.GetExtension(filename).ToLowerInvariant();
+
+        /*if (ext == ".zip" || ext == ".7z" || ext == ".rar")
+        {
+            using var archive = ArchiveFactory.OpenArchive(memoryStream);
+
+            var entry = archive.Entries
+                .Where(e => !e.IsDirectory)
+                .Where(e => !string.IsNullOrEmpty(e.Key))
+                .Where(e => !zipFileBlacklist.Any(x =>
+                    e.Key?.EndsWith(x, StringComparison.OrdinalIgnoreCase) == true))
+                .OrderByDescending(e => e.Size)
+                .FirstOrDefault();
+
+            if (entry != null)
+            {
+                biosName = Path.GetFileName(entry.Key);
+                using var entryStream = entry.OpenEntryStream();
+
+                biosBytes = new byte[entry.Size];
+
+                int totalRead = 0;
+
+                while (totalRead < biosBytes.Length)
+                {
+                    int read = entryStream.Read(biosBytes, totalRead, biosBytes.Length - totalRead);
+                    if (read <= 0)
+                        break;
+                    totalRead += read;
+                }
+            }
+
+            if (biosName is null || biosBytes is null)
+            {
+                Log(sb, cc, $"Could not retrieve bios from {filename}\n", PrintColor.DarkRed);
+                return (success: false, htmlOutput: sb.ToString(), canvasCommands: CanvasCommandsToArray(cc));
+            }
+        }
+        else
+        {
+            biosName = filename;
+            biosBytes = memoryStream.ToArray();
+        }*/
 
         if (filename.EndsWith(".zip"))
         {
@@ -128,125 +179,209 @@
             biosBytes = memoryStream.ToArray();
         }
 
-        Log(sb, cc, $"    File:  {biosName}");
-        Log(sb, cc, $"    Size:  {BytesToKB(biosBytes.Length).ToString("N0")} KB");
-
-        string versionStr = "";
-        var agesaVersion = SearchPattern(biosBytes, "3D 9B 25 70 41 47 45 53 41", 0xD).FirstOrDefault();
-        if (agesaVersion != 0)
+        // ##########################   Agesa, Name, Version    ###################################################### 
+        CombinedResult? both = null;
+        try
         {
-            var buf = new byte[255];
-            Array.Copy(biosBytes, agesaVersion, buf, 0, buf.Length);
-
-            versionStr = Encoding.UTF8.GetString(buf);
-            if (versionStr.Contains('\0'))
+            both = AgesaLzmaScanner.TryFindAgesaAndAmiInLzma(biosBytes);
+            if (both != null)
             {
-                versionStr = versionStr.Substring(0, versionStr.IndexOf('\0'));
-            }
+                string oem = (both.NameWords != null && both.NameWords.Length > 0) ? both.NameWords[0] : string.Empty;
+                {
+                    bool isGigabyte = oem.Contains("Gigabyte", StringComparison.OrdinalIgnoreCase);
+                    bool isShaBoard = oem.Contains("ASRock", StringComparison.OrdinalIgnoreCase) ||
+                                        oem.Contains("ASUSTeK", StringComparison.OrdinalIgnoreCase) ||
+                                        oem.Contains("Micro-Star", StringComparison.OrdinalIgnoreCase) ||
+                                        oem.Contains("Sapphire", StringComparison.OrdinalIgnoreCase);
 
-            Log(sb, cc, $"    AGESA: {versionStr}");
-        }
+                    useSha256 = isArchive && isShaBoard;
+                    useChecksum16 = !isArchive && isGigabyte;
 
-        Log(sb, cc, "");
+                    if (useSha256)
+                    {
+                        using (var sha = SHA256.Create())
+                        {
+                            archiveChecksum = Convert.ToHexString(sha.ComputeHash(memoryStream));
+                            biosChecksum = ComputeSHA256(biosBytes);
+                        }
+                    }
+                    else if (useChecksum16)
+                    {
+                        archiveChecksum = ComputeChecksum16(memoryStream).ToString("X4");
+                        biosChecksum = ComputeChecksum16(biosBytes).ToString("X4");
+                    }
+                }
 
-        List<int> chipsetVersions = SearchPattern(biosBytes, "5F 50 54 5F");
-        if (chipsetVersions.Any())
-        {
-            foreach (int num in chipsetVersions)
-            {
-                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 4);
+                string board = (both.NameWords != null && both.NameWords.Length > 1) ? both.NameWords[1] : string.Empty;
+                bool agesaFound = !string.IsNullOrEmpty(both.Agesa);
+                string agesa = $"AGESA {both.Agesa}";
+                int customWidth = 75;
+                int padoem = Math.Max(0, (customWidth - oem.Length) / 2);
+                int padBoard = Math.Max(0, (customWidth - board.Length) / 2);
+                int padAgesa = Math.Max(0, (customWidth - agesa.Length) / 2);
+                Log(sb, cc, new string(' ', padoem) + oem);
+                Log(sb, cc, new string(' ', padBoard) + board, PrintColor.DarkYellow);
+                if (agesaFound)
+                {
+                    Log(sb, cc,new string(' ', padAgesa) + agesa, PrintColor.White);
+                }
 
-                string yearAndMonth = "";
-                for (int startIndex = num + 140; startIndex < num + 142; ++startIndex)
-                    yearAndMonth = yearAndMonth + BitConverter.ToString(biosBytes, startIndex, 1) + ".";
+                Log(sb, cc,"───────────────────────────────────────────────────────────────────────────", PrintColor.DarkGray);
 
-                string day = "";
-                for (int startIndex = num + 142; startIndex < num + 143; ++startIndex)
-                    day += BitConverter.ToString(biosBytes, startIndex, 1);
+                string buildDate = ReformatAmiDateToDMY(both.AmiLastWord2);
+                if (!string.IsNullOrEmpty(buildDate) && buildDate.Contains("2012"))
+                {
+                    buildDate = "   N/A";
+                }
+                if (!string.IsNullOrEmpty(both.AmiLastWord1))
+                {
+                    if (both.NameWords != null && both.NameWords.Length > 0)
+                    {
+                        var firstName = both.NameWords[0];
+                        if (firstName.IndexOf("ASRock", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            firstName.IndexOf("NZXT", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            var ver = ExtractVersionFromFileName(biosName);
+                            both.AmiLastWord1 = !string.IsNullOrEmpty(ver) ? ver : "N/A";
+                        }
+                    }
+                    bool isAsus = oem.Contains("ASUSTeK", StringComparison.OrdinalIgnoreCase);
+                    string mbecVersion = string.IsNullOrWhiteSpace(both?.MbecVersion) ? "   N/A" : both.MbecVersion;
+                    string ledVersion = string.IsNullOrWhiteSpace(both?.LedVersion) ? "N/A   " : both.LedVersion;
 
-                string firmware = "FW_";
-                for (int index = num + 147; index < num + 152; ++index)
-                    firmware += Encoding.UTF8.GetString(biosBytes, index, 1);
-
-                string versionMajor = "";
-                for (int startIndex = num + 143; startIndex < num + 145; ++startIndex)
-                    versionMajor = versionMajor + BitConverter.ToString(biosBytes, startIndex, 1) + ".";
-
-                string versionMinor = "";
-                for (int startIndex = num + 145; startIndex < num + 146; ++startIndex)
-                    versionMinor += BitConverter.ToString(biosBytes, startIndex, 1);
-
-                Log(sb, cc, $"    Chipset Version/FW:   {versionMajor}{versionMinor} | {firmware} | 20{yearAndMonth}{day} | ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)", PrintColor.Gray);
-            }
-        }
-
-        Log(sb, cc, "");
-
-        Log(sb, cc, "        S Y S T E M    M A N A G E M E N T    U N I T    [ S M U ]        ", PrintColor.White, PrintColor.DarkBlue);
-
-        Log(sb, cc, "   Version       Size          CPU/APU  Family            Offset          ", PrintColor.Black, PrintColor.DarkCyan);
-
-        // Raphael
-        List<int> raphael = SearchPattern(biosBytes, "54 00 00 00 00 00 00 00 00 ? ? ? ? 00 00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -98);
-
-        if (raphael.Any())
-        {
-            foreach (int num in raphael)
-            {
-                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
-                string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
-
-                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Raphael/X      7xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
-            }
-        }
-        else
-        {
-            Log(sb, cc, $"    --.--.-               Raphael (RPL)             [  SMU Not Found  ]", PrintColor.DarkRed);
-        }
-
-        // Phoenix
-        List<int> phoenix = SearchPattern(biosBytes, "01 00 00 00 02 00 00 00 00 00 04 00 ? ? ? 00 ? 10 01 81 00 00 00 00 ? ? 4C", -72);
-
-        if (phoenix.Any())
-        {
-            Log(sb, cc, "   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ", PrintColor.Cyan);
-            foreach (int num in phoenix)
-            {
-                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
-                string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
-
-                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Phoenix/2      8xx0 APU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
+                    if (isAsus)
+                    {
+                        Log(sb, cc, "     Build Date    EC Version   UEFI Version    LED EC FW    File Size", PrintColor.Gray);
+                        Log(sb, cc, $"     {buildDate.PadRight(13)} {mbecVersion.PadRight(13)}{CenterText(both.AmiLastWord1, 12)} {ledVersion.PadLeft(12)} {BytesToKB(biosBytes.Length).ToString("#,0", Punkt).PadLeft(9)} KB");
+                    }
+                    else
+                    {
+                        Log(sb, cc, "        Build Date              UEFI Version             File Size", PrintColor.Gray);
+                        Log(sb, cc, $"        {buildDate.PadRight(24)}{CenterText(both.AmiLastWord1, 12)} {BytesToKB(biosBytes.Length).ToString("#,0", Punkt).PadLeft(18)} KB");
+                    }
+                }
             }
         }
-        else
+        catch
+        { }
+
+        // +++++++++++++++++    Chipsatz    +++++++++++++++++++++++++++++++++++++++++++++++
+        var oChipx = SearchPattern(biosBytes, "5F 50 54 5F", 0x0);
+        if (oChipx.Any())
         {
-            Log(sb, cc, $"    --.--.-               Phoenix (PHX)             [  SMU Not Found  ]", PrintColor.DarkRed);
+            Log(sb, cc, "───────────────────────────────────────────────────────────────────────────", PrintColor.DarkGray);
+            int foundCount = 0;
+            foreach (var smuOffset in oChipx)
+            {
+                if (smuOffset - 0x94 < 0 || smuOffset + 0x98 > biosBytes.Length)
+                    continue;
+
+                var span = biosBytes.AsSpan(smuOffset);
+                int smuLen = BitConverter.ToInt32(biosBytes, smuOffset - 0x94);
+
+                string date = $"{span[0x8E]:X2}.{span[0x8D]:X2}.20{span[0x8C]:X2}";
+                string smuVer = $"{span[0x8F]:X2}.{span[0x90]:X2}.{span[0x91]:X2}";
+                string fw = "FW" + Encoding.ASCII.GetString(biosBytes, smuOffset + 0x93, 5);
+
+                Log(sb, cc, $"        Chipset Info:   {smuVer} | {fw} | {date} | ({BytesToKB(smuLen):N0} KB)", PrintColor.Gray);
+
+                foundCount++;
+                if (foundCount >= 2)
+                    break;
+            }
         }
 
-        // Granite Ridge
-        List<int> graniteRidge = SearchPattern(biosBytes, "62 00 00 00 00 00 00 00 00 ? ? ? ? 00 00 00 00 00 00 00 00 00 00 00 00 00 08 00 01 00", -98);
+        sb.AppendLine();
+
+        Log(sb, cc, "        S Y S T E M    M A N A G E M E N T    U N I T    [ S M U ]         ", PrintColor.White, PrintColor.DarkBlue);
+        Log(sb, cc, "    Version        Size        CPU/APU  Family               Offset        ", PrintColor.Black, PrintColor.DarkCyan);
+
+        // +++++++++++++++++    SMU Suche    +++++++++++++++++++++++++++++++++++++++++++++++
+        var smuDefinition = new FirmwareDefinition
+        {
+            Pattern = "24 50 53 31",
+            SmuValidation = true,
+
+            Ids = new Dictionary<byte, CpuDefinition>
+            {
+                [0x54] = new() { Name = "Raphael/X      7xx0 CPU", LengthFrom14 = false, 
+                FallbackName = "Raphael", FallbackPattern = new[] {new byte[] {0x12,0x60,0x0A,0x05,0x80}, new byte[] {0x13,0x60,0x0A,0x05,0x80}}},
+                [0x4C] = new() { Name = "Phoenix/2      8xx0 APU", LengthFrom14 = false,
+                FallbackName = "Phoenix", FallbackPattern = new[] {new byte[] {0x52,0x70,0x0A,0x05,0x80}, new byte[] {0x80,0x70,0x0A,0x05,0x80}}},
+                [0x62] = new() { Name = "Granite Ridge  9xx0 CPU", LengthFrom14 = false,
+                FallbackName = "Granite Ridge", FallbackPattern = new[] {new byte[] {0x40,0x40,0x0B,0x15,0x80 },new byte[] {0x41,0x40,0x0B,0x15,0x80}}},
+                [0x65] = new() { Name = "Krackan/2    AI xxx APU", LengthFrom14 = true,
+                FallbackName = "Krackan Point", FallbackPattern = new[] {new byte[] {0x80,0x60,0x0B,0x16,0x80 },new byte[] {0x00,0x60,0x0B,0x15,0x80}}},
+
+                [0x5D] = new() { Name = "Strix Point  AI xxx APU", LengthFrom14 = true },
+                [0x64] = new() { Name = "Strix Halo   AI xxx APU", LengthFrom14 = true } 
+            }
+            
+        };
+
+        var results = ScanFirmware(biosBytes, smuDefinition);
+
+
+        // +++++++++++++++++    Ausgabe    ++++++++++++++++++++++++++++++++++++++++++++++++
+        byte[] fallback = { 0xFF, 0xFF, 0xFF, 0x00, 0xFF };
+        var cpuDefinitions = smuDefinition.Ids.Values.ToDictionary(x => x.Name);
+        var familyOrder = smuDefinition.Ids.Values.Select(x => x.Name);
+        bool firstGroup = true;
+        foreach (var family in familyOrder)
+        {
+            var familyResults = results .Where(x => x.Definition.Name == family) .Take(2) .ToList();
+            cpuDefinitions.TryGetValue(family, out var cpu);
+            if (!familyResults.Any() && (cpu == null || cpu.FallbackPattern == null))
+            {
+                continue;
+            }
+            if (!firstGroup)
+            {
+                Log(sb, cc, "   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─", PrintColor.DarkGray);
+            }
+            firstGroup = false;
+            if (familyResults.Any())
+            {
+                foreach (var r in familyResults)
+                {
+                    Log(sb, cc, $"   {r.Version.PadRight(11)}   ({BytesToKB(r.Length).ToString("N0").PadLeft(3)} KB) " +
+                        $"  {r.Definition.Name}   [{r.Offset:X8}-{(r.Offset + r.Length):X8}]", PrintColor.Green);
+                }
+                continue;
+            }
+            //Fallback Anzeige
+            if (cpu != null && cpu.FallbackPattern != null)
+            {
+                bool found = cpu.FallbackPattern.Any(p => ContainsSequenceMasked(biosBytes, p, fallback));
+                if (found)
+                {
+                    Log(sb, cc, $"   Found {cpu.FallbackName} CPUID but SMU detection failed\n   Program update may be necessary", PrintColor.DarkGray);
+                }
+                else
+                {
+                    Log(sb, cc, $"   Couldn't find any {cpu.FallbackName} SMU or CPUID - CPU may not be supported", PrintColor.DarkGray);
+                }
+            }                   
+        }
+
+        sb.AppendLine();
+        Log(sb, cc, "                 Credits to RaINi, Reous and PatrickSchur                  ", PrintColor.Black, PrintColor.DarkBlue);
+
+        if (!string.IsNullOrEmpty(archiveChecksum) &&
+            !string.IsNullOrEmpty(biosChecksum))
+        {
+            if (useSha256)
+            {
+                Log(sb, cc, $"  SHA256: {archiveChecksum}", PrintColor.DarkGray);
+                //Log($"  SHA256: {biosChecksum}", ConsoleColor.DarkGray);
+            }
+            else if (useChecksum16)
+            {
+                Log(sb, cc, $"                          UEFI Checksum : {biosChecksum}", PrintColor.DarkGray);
+                //Log($"                          UEFI Checksum : {archiveChecksum}", ConsoleColor.DarkGray);
+            }
+        }
         
-        if (graniteRidge.Any())
-        {
-            Log(sb, cc, "   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ", PrintColor.Cyan);
-            foreach (int num in graniteRidge)
-            {
-                int sizeInBytes = BitConverter.ToInt32(biosBytes, num + 108);  
-                string version = $"{biosBytes[num + 98]}.{biosBytes[num + 97]}.{biosBytes[num + 96]}";
-
-                Log(sb, cc, $"    {version.PadRight(9)}    ({BytesToKB(sizeInBytes).ToString("N0").PadLeft(3, ' ')}  KB)   Granite Ridge  9xx0 CPU   [{num.ToString("X").PadLeft(8, '0')}-{(num + sizeInBytes).ToString("X").PadLeft(8, '0')}]", PrintColor.Green);
-            }
-        }
-        else
-        {
-            Log(sb, cc, $"    --.--.-               Granite Ridge             [  SMU Not Found  ]", PrintColor.DarkRed);
-        }
-
-        Log(sb, cc, "");
-
-        // Credits
-        Log(sb, cc, "                 Credits to RaINi, Reous and PatrickSchur                ", PrintColor.Black, PrintColor.DarkBlue);
-
         return (success: true, htmlOutput: sb.ToString(), canvasCommands: CanvasCommandsToArray(cc));
     }
 
@@ -321,16 +456,76 @@
         return skipTable;
     }
 
-    private static List<int> SearchPattern(byte[] data, string pattern, int offset = 0x0)
+    static string ComputeSHA256(byte[] data)
     {
-        if (!data.Any())
+        using var sha256 = SHA256.Create();
+        return Convert.ToHexString(sha256.ComputeHash(data));
+    }
+
+    static string? ExtractVersionFromFileName(string fileName)
+    {
+        if (string.IsNullOrEmpty(fileName)) return null;
+
+        var name = Path.GetFileNameWithoutExtension(fileName);
+
+        // Optional dritte numerische Gruppe sowie optionales .AS##
+        var matches = Regex.Matches(
+            name,
+            @"\d+\.\d+(?:\.\d+)?(?:\.[A-Z]{2}\d{2})?",
+            RegexOptions.IgnoreCase
+        );
+
+        if (matches.Count == 0) return null;
+        return matches[matches.Count - 1].Value;
+    }
+
+    static string ReformatAmiDateToDMY(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return "N/A";
+
+        input = input.Trim();
+
+        string[] formats = new[]
         {
-            throw new ArgumentException("Data is empty");
+            "M/d/yyyy", "MM/dd/yyyy",
+            "M/d/yy", "MM/dd/yy",
+            "M-d-yyyy", "MM-dd-yyyy",
+            "M.d.yyyy", "MM.dd.yyyy",
+            "M/d/yyyy HH:mm:ss", "MM/dd/yyyy HH:mm:ss",
+            "M/d/yyyy h:mm tt", "MM/dd/yyyy h:mm tt"
+        };
+
+        if (DateTime.TryParseExact(input, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dt))
+        {
+            // Ausgabe mit Punkten statt Schrägstrichen
+            return dt.ToString("dd.MM.yyyy");
         }
 
-        if (string.IsNullOrEmpty(pattern))
+        var parts = Regex.Split(input, @"\D+").Where(s => !string.IsNullOrEmpty(s)).ToArray();
+        if (parts.Length >= 3)
         {
-            throw new ArgumentException("Pattern is empty");
+            if (int.TryParse(parts[0], out int month) &&
+                int.TryParse(parts[1], out int day) &&
+                int.TryParse(parts[2], out int year))
+            {
+                if (year < 100) year += (year >= 0 && year <= 50) ? 2000 : 1900;
+
+                if (day >= 1 && day <= 31 && month >= 1 && month <= 12)
+                    return $"{day:D2}.{month:D2}.{year:D4}";
+
+                if (month >= 1 && month <= 31 && day >= 1 && day <= 12)
+                    return $"{month:D2}.{day:D2}.{year:D4}";
+            }
+        }
+        return "N/A";
+    }
+
+    static List<int> SearchPattern(byte[] data, string pattern, int offset = 0x0)
+    {
+        if (!data.Any() || string.IsNullOrEmpty(pattern))
+        {
+            throw new ArgumentException("Data or Pattern is empty");
         }
 
         var patternTuple = pattern.Split(' ')
@@ -344,10 +539,8 @@
             throw new Exception("Failed to parse Pattern");
         }
 
-        if (data.Length < pattern.Length)
-        {
+        if (data.Length < patternTuple.Length)
             throw new ArgumentException("Data cannot be smaller than the Pattern");
-        }
 
         var lastPatternIndex = patternTuple.Length - 1;
         var skipTable = CreateMatchingsTable(patternTuple);
@@ -364,7 +557,727 @@
                 }
             }
         }
-
         return adressList;
+    }
+
+    static bool ContainsSequenceMasked(byte[] data, byte[] pattern, byte[] mask)
+    {
+        if (data == null || pattern == null || mask == null ||
+            pattern.Length == 0 || data.Length < pattern.Length ||
+            pattern.Length != mask.Length)
+            return false;
+
+        for (int i = 0; i <= data.Length - pattern.Length; i++)
+        {
+            bool match = true;
+            for (int j = 0; j < pattern.Length; j++)
+            {
+                if (mask[j] == 0x00) continue;
+                if (data[i + j] != pattern[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return true;
+        }
+        return false;
+    }
+
+    static string CenterText(string text, int width)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length >= width)
+            return text;
+
+        int left = (width - text.Length) / 2;
+        int right = width - text.Length - left;
+
+        return new string(' ', left) + text + new string(' ', right);
+    }
+
+    static List<FirmwareResult> ScanFirmware(byte[] biosBytes, FirmwareDefinition definition)
+    {
+        List<FirmwareResult> results = new();
+
+        foreach (var hit in SearchPattern(biosBytes, definition.Pattern))
+        {
+            int offset = hit - 0x10;
+            if (offset < 0 || offset + 0x80 >= biosBytes.Length)
+                continue;
+
+            byte cpuId = biosBytes[offset + 0x62];
+            if (!definition.Ids.TryGetValue(cpuId, out var cpu))
+                continue;
+
+            int length = cpu.LengthFrom14
+                ? BitConverter.ToInt32(biosBytes, offset + 0x14) + 0x800
+                : BitConverter.ToInt32(biosBytes, offset + 0x6C);
+
+            if (definition.SmuValidation)
+            {
+                if (length < 50 * 1024)                // Ergebnisse kleiner 50kb ignorieren
+                    continue;
+                if (cpuId is 0x54 or 0x62 &&
+                    biosBytes[offset + 0x7C] != 0x08)  // 0x08 SMU Check
+                    continue;
+                if ((biosBytes[offset + 0x38], biosBytes[offset + 0x39]) is not
+                    ((0xD6, 0x3D) or (0xB1, 0xFF)))    // SMU Header Ableich 
+                    continue;
+            }
+            string version;
+            if (definition.VersionHex)
+            {
+                version = (biosBytes[offset + 0x63] > 0 ? $"{biosBytes[offset + 0x63]:X2}." : "") +
+                            $"{biosBytes[offset + 0x62]:X2}." +
+                            $"{biosBytes[offset + 0x61]:X2}." +
+                            $"{biosBytes[offset + 0x60]:X2}";
+            }
+            else
+            {
+                version = (biosBytes[offset + 0x63] > 0 ? $"{biosBytes[offset + 0x63]}." : "") +
+                            $"{biosBytes[offset + 0x62]:00}." +
+                            $"{biosBytes[offset + 0x61]:00}." +
+                            $"{biosBytes[offset + 0x60]}";
+            }
+            results.Add(new FirmwareResult
+            {
+                Definition = cpu,
+                Version = version,
+                Length = length,
+                Offset = offset
+            });
+        }
+        return results;
+    }
+
+    static ushort ComputeChecksum16(byte[] data)
+    {
+        uint sum = 0;
+
+        foreach (byte b in data)
+        {
+            sum += b;
+        }
+
+        return (ushort)(sum & 0xFFFF);
+    }
+
+    static ushort ComputeChecksum16(Stream stream)
+    {
+        uint sum = 0;
+
+        int b;
+
+        while ((b = stream.ReadByte()) != -1)
+        {
+            sum += (byte)b;
+        }
+
+        return (ushort)(sum & 0xFFFF);
+    }
+
+    static readonly NumberFormatInfo Punkt = new NumberFormatInfo
+    {
+        NumberGroupSeparator = ".",
+        NumberGroupSizes = new[] { 3 }
+    };
+
+    internal sealed class CombinedResult
+    {
+        public string Agesa { get; set; } = string.Empty;
+        public string AmiLastWord1 { get; set; } = string.Empty;
+        public string AmiLastWord2 { get; set; } = string.Empty;
+        public string[] NameWords { get; set; } = Array.Empty<string>();
+        public string MbecVersion { get; set; } = string.Empty;
+        public string LedVersion { get; set; } = string.Empty;
+    }
+
+    class FirmwareDefinition
+    {
+        public string Pattern { get; set; } = string.Empty;
+        public bool VersionHex { get; set; }
+        public bool SmuValidation { get; set; }
+        public Dictionary<byte, CpuDefinition> Ids { get; set; } = new();
+    }
+
+    class FirmwareResult
+    {
+        public CpuDefinition Definition { get; set; } = null!;
+        public string Version { get; set; } = string.Empty;
+        public int Length { get; set; }
+        public int Offset { get; set; }
+    }
+
+    class CpuDefinition
+    {
+        public string Name { get; set; } = string.Empty;
+        public bool LengthFrom14 { get; set; }
+        public byte[][] FallbackPattern { get; set; }
+        public string FallbackName { get; set; }
+    }
+
+    internal static class AgesaLzmaScanner
+    {
+        private static readonly byte[] GuidBytes = { 0x93, 0xFD, 0x21, 0x9E, 0x72, 0x9C, 0x15, 0x4C, 0x8C, 0x4B, 0xE7, 0x7F, 0x1D, 0xB2, 0xD7, 0x92 };
+        private static readonly byte[] LzmaHeaderPattern = { 0x5D, 0x00, 0x00, 0x00, 0x01 };
+        private static int IndexOfPattern(byte[] data, int start, byte[] pattern)
+        {
+            if (data == null || pattern == null || pattern.Length == 0)
+                return -1;
+
+            for (int i = start; i <= data.Length - pattern.Length; i++)
+            {
+                int j = 0;
+                for (; j < pattern.Length; j++)
+                {
+                    if (data[i + j] != pattern[j])
+                        break;
+                }
+
+                if (j == pattern.Length)
+                    return i;
+            }
+
+            return -1;
+        }
+
+        static int[] CreateMatchingsTable((byte, bool)[] patternTuple)
+        {
+            var skipTable = new int[256];
+            var wildcards = patternTuple.Select(x => x.Item2).ToArray();
+            var lastIndex = patternTuple.Length - 1;
+
+            var diff = lastIndex - Math.Max(Array.LastIndexOf(wildcards, false), 0);
+            if (diff == 0)
+            {
+                diff = 1;
+            }
+
+            for (var i = 0; i < skipTable.Length; i++)
+            {
+                skipTable[i] = diff;
+            }
+
+            for (var i = lastIndex - diff; i < lastIndex; i++)
+            {
+                skipTable[patternTuple[i].Item1] = lastIndex - i;
+            }
+
+            return skipTable;
+        }
+
+        private static int IndexOfPatternLimited(byte[] data, int start, int end, byte[] pattern)
+        {
+            for (int i = start; i <= end - pattern.Length; i++)
+            {
+                int j = 0;
+                for (; j < pattern.Length; j++)
+                {
+                    if (data[i + j] != pattern[j])
+                        break;
+                }
+
+                if (j == pattern.Length)
+                    return i;
+            }
+            return -1;
+        }
+        
+        internal sealed class FoundAndStopException : Exception
+        {
+            public string Result { get; }
+            public FoundAndStopException(string result) : base(result) => Result = result;
+        }
+        internal sealed class ThrottledArraySegmentStream : Stream
+        {
+            private readonly byte[] _data;
+            private readonly int _start;
+            private readonly int _end;
+            private readonly int _chunkSize;
+            private int _pos;
+
+            public ThrottledArraySegmentStream(byte[] data, int start, int? length = null, int chunkSize = 16384)
+            {
+                if (data == null) throw new ArgumentNullException(nameof(data));
+                if (start < 0 || start > data.Length) throw new ArgumentOutOfRangeException(nameof(start));
+                _data = data;
+                _start = start;
+                _pos = start;
+                _end = length.HasValue ? Math.Min(start + length.Value, data.Length) : data.Length;
+                _chunkSize = Math.Max(1, chunkSize);
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => true;
+            public override bool CanWrite => false;
+            public override long Length => _end - _start;
+            public override long Position { get => _pos - _start; set => Seek(value, SeekOrigin.Begin); }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+                if (offset < 0 || count < 0 || offset + count > buffer.Length) throw new ArgumentOutOfRangeException();
+                if (_pos >= _end) return 0;
+                int remaining = _end - _pos;
+                int toCopy = Math.Min(Math.Min(count, remaining), _chunkSize);
+                Buffer.BlockCopy(_data, _pos, buffer, offset, toCopy);
+                _pos += toCopy;
+                return toCopy;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                long abs;
+                switch (origin)
+                {
+                    case SeekOrigin.Begin: abs = _start + offset; break;
+                    case SeekOrigin.Current: abs = _pos + offset; break;
+                    case SeekOrigin.End: abs = _end + offset; break;
+                    default: throw new ArgumentOutOfRangeException(nameof(origin));
+                }
+                if (abs < _start || abs > _end) throw new IOException("Seek out of range.");
+                _pos = (int)abs;
+                return _pos - _start;
+            }
+
+            public override void Flush() { }
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+        
+        internal sealed class CombinedFinderSink : Stream
+        {
+            private static readonly byte[] PatAgesa = Encoding.ASCII.GetBytes("AGESA!V9");
+            private static readonly byte[] PatAmi = { 0x00, 0x00, 0x01, 0x1B, 0x01, 0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x02, 0x00, 0x03 };
+            private static readonly byte[] PatName = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x09, 0x06, 0xFF, 0x00, 0x0A, 0x00 };
+            private static readonly byte[] PatMbec = { 0x4D, 0x42, 0x45, 0x43 };
+            private static readonly byte[] PatLED = { 0x41, 0x55, 0x4C, 0x41, 0x33 };
+
+            // ---- MBEC ----
+            private int _mbMatch;
+            private bool _mbFound;
+            private byte[] _mbBuf = new byte[64];
+            private int _mbLen;
+            private bool _mbDone;
+
+            public readonly CombinedResult Result = new CombinedResult();
+
+            // ---- AGESA ----
+            private int _agMatch; private bool _agFound; private int _agStrIndex;
+            private byte[] _agBuf = new byte[64]; private int _agLen; private bool _agDone;
+
+            // ---- AMI ----
+            private const int AmiMaxWordLen = 32; private int _amMatch;
+            private byte[] _amCur = new byte[AmiMaxWordLen]; private int _amCurLen;
+            private byte[] _amLast1 = new byte[AmiMaxWordLen]; private int _amLast1Len;
+            private byte[] _amLast2 = new byte[AmiMaxWordLen]; private int _amLast2Len;
+            private byte[] _amBefore1 = new byte[AmiMaxWordLen]; private int _amBefore1Len;
+            private byte[] _amBefore2 = new byte[AmiMaxWordLen]; private int _amBefore2Len;
+            private bool _amDone;
+
+            // ---- NAME ----
+            private int _nmMatch; private bool _nmFound; private int _nmZeroRun;
+            private byte[] _nmCur = new byte[64]; private int _nmCurLen;
+            private System.Collections.Generic.List<string> _nmWords = new System.Collections.Generic.List<string>();
+            private bool _nmDone;
+
+            // ---- LED ----
+            private int _ledMatch;
+            private bool _ledFound;
+            private byte[] _ledBuf = new byte[64];
+            private int _ledLen;
+            private bool _ledDone;
+
+
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                int end = offset + count;
+                for (int i = offset; i < end; i++)
+                {
+                    byte b = buffer[i];
+
+                    // ---- AGESA ----
+                    if (!_agDone)
+                    {
+                        if (!_agFound)
+                        {
+                            if (b == PatAgesa[_agMatch])
+                            {
+                                _agMatch++;
+                                if (_agMatch == PatAgesa.Length)
+                                {
+                                    _agFound = true; _agMatch = 0; _agStrIndex = 0; _agLen = 0;
+                                }
+                            }
+                            else _agMatch = (b == PatAgesa[0]) ? 1 : 0;
+                        }
+                        else
+                        {
+                            if (b == 0x00)
+                            {
+                                if (_agStrIndex == 1)
+                                {
+                                    Result.Agesa = Encoding.ASCII.GetString(_agBuf, 0, _agLen);
+                                    _agDone = true;
+                                }
+                                _agStrIndex++; _agLen = 0;
+                            }
+                            else if (_agStrIndex <= 1)
+                            {
+                                if (_agLen == _agBuf.Length)
+                                {
+                                    var nb = new byte[_agBuf.Length << 1];
+                                    Buffer.BlockCopy(_agBuf, 0, nb, 0, _agBuf.Length);
+                                    _agBuf = nb;
+                                }
+                                _agBuf[_agLen++] = b;
+                            }
+                        }
+                    }
+
+                    // ---- AMI ----
+                    if (!_amDone)
+                    {
+                        // 1. C-Wörter immer mitschneiden
+                        if (b == 0x00)
+                        {
+                            if (_amCurLen > 0)
+                            {
+                                Buffer.BlockCopy(_amLast1, 0, _amLast2, 0, AmiMaxWordLen);
+                                _amLast2Len = _amLast1Len;
+
+                                Buffer.BlockCopy(_amCur, 0, _amLast1, 0, _amCurLen);
+                                _amLast1Len = _amCurLen;
+
+                                _amCurLen = 0;
+                            }
+                        }
+                        else
+                        {
+                            if (_amCurLen < AmiMaxWordLen)
+                            {
+                                _amCur[_amCurLen++] = b;
+                            }
+                        }
+                        if (_amMatch == 0)
+                        {
+                            if (b == PatAmi[0])
+                            {
+                                _amMatch = 1;
+
+                                Buffer.BlockCopy(_amLast2, 0, _amBefore1, 0, AmiMaxWordLen);
+                                _amBefore1Len = _amLast2Len;
+
+                                Buffer.BlockCopy(_amLast1, 0, _amBefore2, 0, AmiMaxWordLen);
+                                _amBefore2Len = _amLast1Len;
+                            }
+                        }
+                        else
+                        {
+                            if (b == PatAmi[_amMatch])
+                            {
+                                _amMatch++;
+
+                                if (_amMatch == PatAmi.Length)
+                                {
+                                    Result.AmiLastWord1 = (_amBefore1Len > 0)
+                                        ? Encoding.ASCII.GetString(_amBefore1, 0, _amBefore1Len)
+                                        : string.Empty;
+
+                                    Result.AmiLastWord2 = (_amBefore2Len > 0)
+                                        ? Encoding.ASCII.GetString(_amBefore2, 0, _amBefore2Len)
+                                        : string.Empty;
+
+                                    _amDone = true;
+                                }
+                            }
+                            else
+                            {
+                                _amMatch = (b == PatAmi[0]) ? 1 : 0;
+
+                                if (_amMatch == 1)
+                                {
+                                    Buffer.BlockCopy(_amLast2, 0, _amBefore1, 0, AmiMaxWordLen);
+                                    _amBefore1Len = _amLast2Len;
+
+                                    Buffer.BlockCopy(_amLast1, 0, _amBefore2, 0, AmiMaxWordLen);
+                                    _amBefore2Len = _amLast1Len;
+                                }
+                            }
+                        }
+
+                    }
+
+                    // ---- NAME ----
+                    if (!_nmDone)
+                    {
+                        if (!_nmFound)
+                        {
+                            if (PatName[_nmMatch] == 0xFF || b == PatName[_nmMatch])
+                            {
+                                _nmMatch++;
+                                if (_nmMatch == PatName.Length)
+                                {
+                                    _nmFound = true;
+                                    _nmMatch = 0;
+                                    _nmZeroRun = 0;
+                                    _nmCurLen = 0;
+                                    _nmWords.Clear();
+                                }
+                            }
+                            else
+                            {
+                                _nmMatch = (b == PatName[0]) ? 1 : 0;
+                            }
+                        }
+                        else
+                        {
+                            if (b == 0x00)
+                            {
+                                _nmZeroRun++;
+
+                                if (_nmCurLen > 0)
+                                {
+                                    var w = Encoding.ASCII.GetString(_nmCur, 0, _nmCurLen);
+                                    if (!string.IsNullOrEmpty(w))
+                                        _nmWords.Add(w);
+
+                                    _nmCurLen = 0;
+                                }
+
+                                if (_nmWords.Count >= 2)
+                                {
+                                    Result.NameWords = _nmWords.ToArray();
+                                    _nmDone = true;
+                                }
+                            }
+                            else
+                            {
+                                _nmZeroRun = 0;
+                                if (_nmCurLen == _nmCur.Length)
+                                {
+                                    var nb = new byte[_nmCur.Length << 1];
+                                    Buffer.BlockCopy(_nmCur, 0, nb, 0, _nmCur.Length);
+                                    _nmCur = nb;
+                                }
+                                _nmCur[_nmCurLen++] = b;
+                            }
+                        }
+                    }
+
+                    // ---- MBEC ----
+                    if (!_mbDone)
+                    {
+                        if (!_mbFound)
+                        {
+                            if (b == PatMbec[_mbMatch])
+                            {
+                                _mbMatch++;
+
+                                if (_mbMatch == PatMbec.Length)
+                                {
+                                    _mbFound = true;
+                                    _mbLen = 0;
+                                    _mbBuf[_mbLen++] = (byte)'M';
+                                    _mbBuf[_mbLen++] = (byte)'B';
+                                    _mbBuf[_mbLen++] = (byte)'E';
+                                    _mbBuf[_mbLen++] = (byte)'C';
+                                }
+                            }
+                            else
+                            {
+                                _mbMatch = (b == PatMbec[0]) ? 1 : 0;
+                            }
+                        }
+                        else
+                        {
+                            if (b >= 0x20 && b <= 0x7E)
+                            {
+                                if (_mbLen < _mbBuf.Length)
+                                {
+                                    _mbBuf[_mbLen++] = b;
+                                }
+                            }
+                            else
+                            {
+                                string text = Encoding.ASCII.GetString(_mbBuf, 0, _mbLen);
+                                string[] parts = text.Split('-');
+
+                                if (parts.Length >= 3)
+                                {
+                                    Result.MbecVersion = parts[1] + "-" + parts[2];
+                                }
+                                _mbDone = true;
+                            }
+                        }
+                    }
+                    // ---- LED ----
+                    if (!_ledDone)
+                    {
+                        if (!_ledFound)
+                        {
+                            if (b == PatLED[_ledMatch])
+                            {
+                                _ledMatch++;
+
+                                if (_ledMatch == PatLED.Length)
+                                {
+                                    _ledFound = true;
+
+                                    _ledLen = 0;
+                                    _ledBuf[_ledLen++] = (byte)'A';
+                                    _ledBuf[_ledLen++] = (byte)'U';
+                                    _ledBuf[_ledLen++] = (byte)'L';
+                                    _ledBuf[_ledLen++] = (byte)'A';
+                                    _ledBuf[_ledLen++] = (byte)'3';
+                                }
+                            }
+                            else
+                            {
+                                _ledMatch = (b == PatLED[0]) ? 1 : 0;
+                            }
+                        }
+                        else
+                        {
+                            if (b >= 0x20 && b <= 0x7E)
+                            {
+                                if (_ledLen < _ledBuf.Length)
+                                {
+                                    _ledBuf[_ledLen++] = b;
+                                }
+                            }
+                            else
+                            {
+                                string text = Encoding.ASCII.GetString(_ledBuf, 0, _ledLen);
+                                string[] parts = text.Split('-');
+
+                                if (parts.Length >= 3)
+                                {
+                                    Result.LedVersion = parts[1] + "-" + parts[2];
+                                }
+
+                                _ledDone = true;
+                            }
+                        }
+                    }
+
+                    if (_agDone && _amDone && _nmDone && _mbDone && _ledDone)
+                        throw new FoundAndStopException("all");
+                }
+            }
+        }
+
+        public static CombinedResult? TryFindAgesaAndAmiInLzma(byte[] bios)
+        {
+            if (bios == null || bios.Length < 32) return null;
+
+            int guidAt = IndexOfGuidBMH(bios, GuidBytes);
+            if (guidAt < 0) return null;
+
+            int searchStart = guidAt + GuidBytes.Length;
+            int searchEnd = Math.Min(bios.Length, searchStart + 0x100);
+
+            int lzmaStart = IndexOfPatternLimited(bios, searchStart, searchEnd, LzmaHeaderPattern);
+            if (lzmaStart < 0)
+            {
+                return null;
+            }
+
+            if (lzmaStart + 13 > bios.Length) return null;
+
+            using (var src = new ThrottledArraySegmentStream(bios, lzmaStart, null, 4096))
+            {
+                // --- LZMA-Alone Header ---
+                byte[] props = new byte[5];
+                if (src.Read(props, 0, 5) != 5) return null;
+
+                byte[] sizeBuf = new byte[8];
+                if (src.Read(sizeBuf, 0, 8) != 8) return null;
+
+                long outSize;
+                bool allFF = true;
+                for (int i = 0; i < 8; i++)
+                    if (sizeBuf[i] != 0xFF) { allFF = false; break; }
+
+                if (allFF)
+                    outSize = -1;
+                else
+                {
+                    ulong u = BitConverter.ToUInt64(sizeBuf, 0);
+                    outSize = (u <= long.MaxValue) ? (long)u : -1;
+                }
+
+                try
+                {
+                    using (var lz = LzmaStream.Create(props, src, -1, outSize))
+                    {
+                        var sink = new CombinedFinderSink();
+                        byte[] buf = new byte[8192];
+                        int r;
+
+                        try
+                        {
+                            while ((r = lz.Read(buf, 0, buf.Length)) > 0)
+                                sink.Write(buf, 0, r);
+                        }
+                        catch (FoundAndStopException)
+                        {
+                            return sink.Result;
+                        }
+
+                        if (!string.IsNullOrEmpty(sink.Result?.Agesa) ||
+                            !string.IsNullOrEmpty(sink.Result?.AmiLastWord1) ||
+                            !string.IsNullOrEmpty(sink.Result?.AmiLastWord2) ||
+                            !string.IsNullOrEmpty(sink.Result?.MbecVersion) ||
+                            !string.IsNullOrEmpty(sink.Result?.LedVersion) ||
+                            (sink.Result?.NameWords != null && sink.Result.NameWords.Length > 0))
+                        {
+                            return sink.Result;
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        }
+
+        private static int IndexOfGuidBMH(byte[] data, byte[] needle)
+        {
+            int n = data.Length, m = needle.Length;
+            if (m == 0) return 0;
+            if (n < m) return -1;
+
+            int[] shift = new int[256];
+            for (int i = 0; i < shift.Length; i++) shift[i] = m;
+            for (int i = 0; i < m - 1; i++) shift[needle[i]] = m - 1 - i;
+
+            int pos = 0;
+            byte last = needle[m - 1];
+            while (pos <= n - m)
+            {
+                if (data[pos + m - 1] == last)
+                {
+                    int j = m - 2;
+                    while (j >= 0 && data[pos + j] == needle[j]) j--;
+                    if (j < 0) return pos;
+                }
+                pos += shift[data[pos + m - 1]];
+            }
+            return -1;
+        }
     }
 }
