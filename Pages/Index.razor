@@ -788,6 +788,7 @@
             public string Result { get; }
             public FoundAndStopException(string result) : base(result) => Result = result;
         }
+        
         internal sealed class ThrottledArraySegmentStream : Stream
         {
             private readonly byte[] _data;
@@ -887,8 +888,6 @@
             private byte[] _ledBuf = new byte[64];
             private int _ledLen;
             private bool _ledDone;
-
-
 
             public override bool CanRead => false;
             public override bool CanSeek => false;
